@@ -1,4 +1,3 @@
-
 #include <cuda_runtime_api.h>
 #include <math.h>
 #include<fcntl.h>
