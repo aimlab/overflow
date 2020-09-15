@@ -5,6 +5,7 @@
 #include <sys/mman.h> // mmap, munmap
 #include <string.h>
 #include "monitor.h"
+#define CUMALLOC
 namespace cruiser{
 
 void beforeExit(void);
@@ -125,10 +126,17 @@ static CUresult CUDAAPI malloc_wrapper(void** p_addr, size_t size){
 #endif //page fault
 
 static CUresult CUDAAPI free_wrapper(void* addr){
+	//	fprintf(stderr, "end hooking cuMemFree.\n");
 
-	if(__builtin_expect(!addr, 0))
-		return CUDA_ERROR_INVALID_VALUE;
+	if(__builtin_expect(!addr, 0)){
+		fprintf(stderr, "Free NULL pointer.\n");
+		return CUDA_SUCCESS;
+		//return CUDA_ERROR_INVALID_VALUE;
+	}
+		
+
 	beforeFree(addr);
+	
 	return CUDA_SUCCESS;
 }
 
@@ -158,14 +166,39 @@ if(!cruiser::real_cuMemFree){
 fprintf(stderr, "begin hooking cuMemFree.\n");
 cruiser::real_cuMemFree=(cruiser::fnMemFree)cruiser::real_dlsym(dlopen("libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL), CUDA_SYMBOL_STRING(cuMemFree));
 }
+//fprintf(stderr, "end hooking cuMemFree.\n");
  cudaDeviceSynchronize();
-return cruiser::free_wrapper((void*)dptr);;
 
+#ifdef CUMALLOC
+return cruiser::free_wrapper((void*)dptr);
+#else
+return cruiser::real_cuMemFree(dptr);
+#endif
+}
+}
+
+extern "C" {
+
+CUresult CUDAAPI cuMemFreeHost ( void* dptr ){
+//	fprintf(stderr, "begin hooking cuMemFreeHost.\n");
+	
+
+if(!cruiser::real_cuMemFreeHost){
+fprintf(stderr, "begin hooking cuMemFreeHost.\n");
+cruiser::real_cuMemFreeHost=(cruiser::fnMemFreeHost)cruiser::real_dlsym(dlopen("libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL), CUDA_SYMBOL_STRING(cuMemFreeHost));
+}
+
+//fprintf(stderr, "end hooking cuMemFree.\n");
+ cudaDeviceSynchronize();
+ 
+return cruiser::free_wrapper((void*)dptr);
+//return cruiser::real_cuMemFree(dptr);
 }
 }
 
 extern "C" {
 CUresult CUDAAPI cuMemAlloc(CUdeviceptr *dptr, size_t bytesize){
+//	fprintf(stderr, "============.\n");
 if(!cruiser::real_cuMemAlloc){
 fprintf(stderr, "begin hooking cuMemAlloc.\n");
 cruiser::real_cuMemAlloc=(cruiser::fnMemAlloc)cruiser::real_dlsym(dlopen("libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL), CUDA_SYMBOL_STRING(cuMemAlloc));
@@ -174,8 +207,41 @@ return cruiser::malloc_wrapper((void**)(dptr),bytesize);
 
 }
 }
+
+
+extern "C" {
+CUresult CUDAAPI cuMemHostAlloc ( void** dptr, size_t bytesize, unsigned int  Flags ){
+//	fprintf(stderr, "begin hooking cuMemHostAlloc.\n");
+if(!cruiser::real_cuMemHostAlloc){
+fprintf(stderr, "begin hooking cuMemHostAlloc.\n");
+cruiser::real_cuMemHostAlloc=(cruiser::fnMemHostAlloc)cruiser::real_dlsym(dlopen("libcuda.so.1", RTLD_LAZY | RTLD_GLOBAL), CUDA_SYMBOL_STRING(cuMemHostAlloc));
+}
+//	fprintf(stderr, "pointer=%p, flag=%u\n",(void*)dptr, Flags);
+
+if(Flags!=0)
+fprintf(stderr, "**************There is a implicit problem when Flag=!0***********.\n");
+
+return cruiser::malloc_wrapper((void**)(dptr),bytesize);
+
+//return cruiser::real_cuMemHostAlloc( dptr,  bytesize, Flags );//这里怎么free是个问题
+}
+}
+
+// extern "C" {
+// CUresult CUDAAPI cudaMallocHost ( void** ptr, size_t size ){
+// 	fprintf(stderr, "cudaMallocHost============.\n");
+// if(!cruiser::real_fncudaMallocHost){
+// fprintf(stderr, "begin hooking cuMemAlloc.\n");
+// cruiser::real_fncudaMallocHost=(cruiser::fncudaMallocHost)cruiser::real_dlsym(RTLD_NEXT, "cudaMallocHost");
+// }
+// return cruiser::malloc_wrapper((void**)(dptr),bytesize);
+
+// }
+// }
+
 void* dlsym(void *handle, const char *symbol)
 {
+//		printf("symbol %s\n",symbol);
     if (strncmp(symbol, "cu", 2) != 0) {
         return (cruiser::real_dlsym(handle, symbol));
     }
@@ -183,12 +249,25 @@ void* dlsym(void *handle, const char *symbol)
     if (strcmp(symbol, CUDA_SYMBOL_STRING(cuMemFree)) == 0) {
         return (void*)(&cuMemFree);
     }
+	#ifdef CUMALLOC
     else if (strcmp(symbol, CUDA_SYMBOL_STRING(cuMemAlloc)) == 0) {
+		//printf("symbol %s\n",symbol);
         return (void*)(&cuMemAlloc);
     }
+	#endif
     else if (strcmp(symbol, CUDA_SYMBOL_STRING(cuMemAllocPitch)) == 0) {
             return (void*)(&cuMemAllocPitch);
-        }
+    }
+	else if (strcmp(symbol, CUDA_SYMBOL_STRING(cuMemHostAlloc)) == 0) {
+	//	printf("===========symbol %s\n",symbol);
+            return (void*)(&cuMemHostAlloc);
+		 //  return NULL;
+    }
+	else if (strcmp(symbol, CUDA_SYMBOL_STRING(cuMemFreeHost)) == 0) {
+	//			printf("=============symbol %s\n",symbol);
+
+            return (void*)(&cuMemFreeHost);
+    }
     return (cruiser::real_dlsym(handle, symbol));
 }
 
